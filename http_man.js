@@ -13,6 +13,25 @@
  */
 
 let http = require('http');
+const axios = require("axios");
+
+exports.getSortieLatest = async (path, cra, callback) => {
+    try {
+        const response = await axios.get(path + '?fu=1&ty=3&cra=' + cra, {
+            headers: {
+                'X-M2M-RI': String(parseInt(Math.random() * 10000)),
+                'X-M2M-Origin': 'SVue',
+                'Content-Type': 'application/json'
+            }
+        });
+        console.log('getSortieLatest', response.data['m2m:uril']);
+        callback(response.status, response.data['m2m:uril']);
+    }
+    catch (err) {
+        console.log("Error >>", err);
+        callback(9999, err)
+    }
+}
 
 function http_request(origin, path, method, ty, bodyString, callback) {
     var options = {
@@ -28,15 +47,15 @@ function http_request(origin, path, method, ty, bodyString, callback) {
         }
     };
 
-    if(bodyString.length > 0) {
+    if (bodyString.length > 0) {
         options.headers['Content-Length'] = bodyString.length;
     }
 
-    if(method === 'post') {
-        var a = (ty==='') ? '': ('; ty='+ty);
+    if (method === 'post') {
+        var a = (ty === '') ? '' : ('; ty=' + ty);
         options.headers['Content-Type'] = 'application/vnd.onem2m-res+json' + a;
     }
-    else if(method === 'put') {
+    else if (method === 'put') {
         options.headers['Content-Type'] = 'application/vnd.onem2m-res+json';
     }
 
@@ -53,7 +72,7 @@ function http_request(origin, path, method, ty, bodyString, callback) {
 
         res.on('end', function () {
             try {
-                if(res_body == '') {
+                if (res_body == '') {
                     jsonObj = {};
                 }
                 else {
@@ -87,7 +106,7 @@ function http_request(origin, path, method, ty, bodyString, callback) {
     req.end();
 }
 
-exports.crtci = function(parent, count, content_obj, socket, callback) {
+exports.crtci = function (parent, count, content_obj, socket, callback) {
     var results_ci = {};
     var bodyString = '';
 
@@ -108,21 +127,26 @@ global.getType = function (p) {
     var type = 'string';
     if (Array.isArray(p)) {
         type = 'array';
-    } else if (typeof p === 'string') {
+    }
+    else if (typeof p === 'string') {
         try {
             var _p = JSON.parse(p);
             if (typeof _p === 'object') {
                 type = 'string_object';
-            } else {
+            }
+            else {
                 type = 'string';
             }
-        } catch (e) {
+        }
+        catch (e) {
             type = 'string';
             return type;
         }
-    } else if (p != null && typeof p === 'object') {
+    }
+    else if (p != null && typeof p === 'object') {
         type = 'object';
-    } else {
+    }
+    else {
         type = 'other';
     }
 

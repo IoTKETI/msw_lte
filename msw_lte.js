@@ -20,6 +20,9 @@ const {exec, spawn} = require('child_process')
 const {nanoid} = require('nanoid');
 const util = require("util");
 const db = require('node-localdb');
+require("moment-timezone");
+const moment = require('moment');
+moment.tz.setDefault("Asia/Seoul");
 
 global.sh_man = require('./http_man');
 
@@ -73,8 +76,11 @@ let msw_sub_mobius_topic = [];
 let msw_sub_fc_topic = [];
 // msw_sub_fc_topic.push('/TELE/drone/hb');
 msw_sub_fc_topic.push('/od/tele/broadcast/man/gpi/orig');
+msw_sub_fc_topic.push('/od/tele/relay/man/sortie/orig');
 
 let msw_sub_lib_topic = [];
+
+let my_sortie_name = 'disarm';
 
 function init() {
     if (config.lib.length > 0) {
@@ -92,7 +98,7 @@ function init() {
                     for (let i = 0; i < config.lib[idx].data.length; i++) {
                         let container_name = config.lib[idx].data[i];
                         let _topic = '/MUV/data/' + config.lib[idx].name + '/' + container_name;
-                        local_msw_mqtt_client.subscribe(_topic);
+                        dr_mqtt_client.subscribe(_topic);
                         msw_sub_lib_topic.push(_topic);
                         console.log('[lib_mqtt] msw_sub_lib_topic[' + i + ']: ' + _topic);
                     }
@@ -217,12 +223,12 @@ function msw_mqtt_connect(broker_ip, port) {
     }
 }
 
-let local_msw_mqtt_client = null;
+let dr_mqtt_client = null;
 
-local_msw_mqtt_connect('localhost', 1883);
+dr_mqtt_connect('localhost', 1883);
 
-function local_msw_mqtt_connect(broker_ip, port) {
-    if (local_msw_mqtt_client == null) {
+function dr_mqtt_connect(broker_ip, port) {
+    if (dr_mqtt_client == null) {
         let connectOptions = {
             host: broker_ip,
             port: port,
@@ -230,26 +236,26 @@ function local_msw_mqtt_connect(broker_ip, port) {
             keepalive: 10,
             protocolId: "MQTT",
             protocolVersion: 4,
-            clientId: 'local_msw_mqtt_client_mqttjs_' + config.drone + '_' + config.name + '_' + nanoid(15),
+            clientId: 'dr_mqtt_client_mqttjs_' + config.drone + '_' + config.name + '_' + nanoid(15),
             clean: true,
             reconnectPeriod: 2000,
             connectTimeout: 2000,
             rejectUnauthorized: false
         };
 
-        local_msw_mqtt_client = mqtt.connect(connectOptions);
+        dr_mqtt_client = mqtt.connect(connectOptions);
 
-        local_msw_mqtt_client.on('connect', function () {
-            console.log('[local_msw_mqtt_connect] connected to ' + broker_ip);
+        dr_mqtt_client.on('connect', function () {
+            console.log('[dr_mqtt_connect] connected to ' + broker_ip);
             for (let idx in msw_sub_fc_topic) {
                 if (msw_sub_fc_topic.hasOwnProperty(idx)) {
-                    local_msw_mqtt_client.subscribe(msw_sub_fc_topic[idx]);
+                    dr_mqtt_client.subscribe(msw_sub_fc_topic[idx]);
                     console.log('[local_msw_mqtt] msw_sub_fc_topic[' + idx + ']: ' + msw_sub_fc_topic[idx]);
                 }
             }
         });
 
-        local_msw_mqtt_client.on('message', function (topic, message) {
+        dr_mqtt_client.on('message', function (topic, message) {
             for (let idx in msw_sub_fc_topic) {
                 if (msw_sub_fc_topic.hasOwnProperty(idx)) {
                     if (topic === msw_sub_fc_topic[idx]) {
@@ -268,7 +274,7 @@ function local_msw_mqtt_connect(broker_ip, port) {
             }
         });
 
-        local_msw_mqtt_client.on('error', function (err) {
+        dr_mqtt_client.on('error', function (err) {
             console.log(err.message);
         });
     }
@@ -307,9 +313,10 @@ function parseDataMission(topic, str_message) {
         ///////////////////////////////////////////////////////////////////////
 
         let topic_arr = topic.split('/');
-        let data_topic = '/Mobius/' + config.gcs + '/Mission_Data/' + config.drone + '/' + config.name + '/' + topic_arr[topic_arr.length - 1];
+        let data_topic = '/Mobius/' + config.gcs + '/Mission_Data/' + config.drone + '/' + config.name + '/' + topic_arr[topic_arr.length - 1] + '/orig';
         // msw_mqtt_client.publish(data_topic + '/' + sortie_name, str_message);
-        msw_mqtt_client.publish(data_topic, str_message);
+        dr_mqtt_client.publish(data_topic, str_message);
+        data_topic = '/Mobius/' + config.gcs + '/Mission_Data/' + config.drone + '/' + config.name + '/' + topic_arr[topic_arr.length - 1] + '/' + my_sortie_name;
         sh_man.crtci(data_topic + '?rcn=0', 0, JSON.parse(str_message), null, function (rsc, res_body, parent, socket) {
             if (rsc === '2001') {
                 setTimeout(mon_local_db, 500, data_topic);
@@ -331,7 +338,7 @@ function parseControlMission(topic, str_message) {
     try {
         let topic_arr = topic.split('/');
         let _topic = '/MUV/control/' + config.lib[0].name + '/' + topic_arr[topic_arr.length - 1];
-        local_msw_mqtt_client.publish(_topic, str_message);
+        dr_mqtt_client.publish(_topic, str_message);
     }
     catch (e) {
         console.log('[parseControlMission] data format of lib is not json');
@@ -340,7 +347,56 @@ function parseControlMission(topic, str_message) {
 
 function parseFcData(topic, str_message) {
     let topic_arr = topic.split('/');
-    fc[topic_arr[topic_arr.length - 2]] = JSON.parse(str_message);
+    if (topic_arr[topic_arr.length - 2] !== 'sortie') {
+        fc[topic_arr[topic_arr.length - 2]] = JSON.parse(str_message);
+    }
+    else { // sortie_topic
+        let arr_message = str_message.toString().split(':');
+        let _my_sortie_name = arr_message[0];
+
+        if (_my_sortie_name === 'unknown-arm') { // 시작될 때 이미 드론이 시동이 걸린 상태
+            // 모비우스 조회해서 현재 sortie를 찾아서 설정함
+            let path = 'http://192.168.' + drone_info.system_id + '.' + (parseInt(drone_info.system_id) - 1) + ':7579/Mobius/' + drone_info.gcs + '/Drone_Data/' + drone_info.drone;
+            let cra = moment().utc().format('YYYYMMDD');
+
+            sh_man.getSortieLatest(path, cra, (status, uril) => {
+                if (status !== 9999) {
+                    if (uril.length === 0) {
+                        // 현재 시동이 걸린 상태인데 오늘 생성된 sortie가 없다는 뜻이므로 새로 만듦
+                        my_sortie_name = moment().format('YYYY_MM_DD_T_HH_mm');
+                    }
+                    else {
+                        my_sortie_name = uril[0].split('/')[4];
+                    }
+                }
+                else {
+                    path = 'http://' + drone_info.host + ':7579/Mobius/' + drone_info.gcs + '/Drone_Data/' + drone_info.drone;
+
+                    sh_man.getSortieLatest(path, cra, (status, uril) => {
+                        if (uril.length === 0) {
+                            // 현재 시동이 걸린 상태인데 오늘 생성된 sortie가 없다는 뜻이므로 새로 만듦
+                            my_sortie_name = moment().format('YYYY_MM_DD_T_HH_mm');
+                        }
+                        else {
+                            my_sortie_name = uril[0].split('/')[4];
+                        }
+                    });
+                }
+            });
+        }
+        else if (_my_sortie_name === 'unknown-disarm') { // 시작될 때 드론이 시동이 꺼진 상태
+            // disarm sortie 적용
+            my_sortie_name = 'disarm';
+        }
+        else if (_my_sortie_name === 'disarm-arm') { // 드론이 꺼진 상태에서 시동이 걸리는 상태
+            // 새로운 sortie 만들어 생성하고 설정
+            my_sortie_name = moment().format('YYYY_MM_DD_T_HH_mm');
+        }
+        else if (_my_sortie_name === 'arm-disarm') { // 드론이 시동 걸린 상태에서 시동이 꺼지는 상태
+            // disarm sortie 적용
+            my_sortie_name = 'disarm';
+        }
+    }
 }
 
 function mon_local_db(data_topic) {
