@@ -62,7 +62,7 @@ catch (e) {
         name: 'lib_lte',
         target: 'armv6',
         description: "[name] [portnum] [baudrate]",
-        scripts: './lib_lte /dev/ttyUSB1 115200',
+        scripts: './lib_lte /dev/ttyUSB2 57600',
         data: ['LTE'],
         control: []
     };
